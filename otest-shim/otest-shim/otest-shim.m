@@ -18,9 +18,11 @@
 
 #import <SenTestingKit/SenTestingKit.h>
 
+#import <dlfcn.h>
+#import <mach-o/dyld.h>
+
 #import "DuplicateTestNameFix.h"
 #import "dyld-interposing.h"
-#import "dyld_priv.h"
 #import "EventGenerator.h"
 #import "ParseTestName.h"
 #import "ReporterEvents.h"
@@ -432,80 +434,79 @@ static void PrintNewlineAndCloseFDs()
 
 #pragma mark - Entry
 
-static const char *DyldImageStateChangeHandler(enum dyld_image_states state,
-                                               uint32_t infoCount,
-                                               const struct dyld_image_info info[])
+static void DyldAddImageHandler(const struct mach_header* header, intptr_t vmaddr_slide)
 {
-  for (uint32_t i = 0; i < infoCount; i++) {
-    // Sometimes the image path will be something like...
-    //   '.../SenTestingKit.framework/SenTestingKit'
-    // Other times it could be...
-    //   '.../SenTestingKit.framework/Versions/A/SenTestingKit'
-    if (strstr(info[i].imageFilePath, "SenTestingKit.framework") != NULL) {
-      // Since the 'SenTestLog' class now exists, we can swizzle it!
-      XTSwizzleClassSelectorForFunction(NSClassFromString(@"SenTestLog"),
-                                        @selector(testSuiteDidStart:),
-                                        (IMP)SenTestLog_testSuiteDidStart);
-      XTSwizzleClassSelectorForFunction(NSClassFromString(@"SenTestLog"),
-                                        @selector(testSuiteDidStop:),
-                                        (IMP)SenTestLog_testSuiteDidStop);
-      XTSwizzleClassSelectorForFunction(NSClassFromString(@"SenTestLog"),
-                                        @selector(testCaseDidStart:),
-                                        (IMP)SenTestLog_testCaseDidStart);
-      XTSwizzleClassSelectorForFunction(NSClassFromString(@"SenTestLog"),
-                                        @selector(testCaseDidStop:),
-                                        (IMP)SenTestLog_testCaseDidStop);
-      XTSwizzleClassSelectorForFunction(NSClassFromString(@"SenTestLog"),
-                                        @selector(testCaseDidFail:),
-                                        (IMP)SenTestLog_testCaseDidFail);
-      XTSwizzleSelectorForFunction(NSClassFromString(@"SenTestCase"),
-                                   @selector(performTest:),
-                                   (IMP)SenTestCase_performTest);
-      if (__testScope) {
-        XTSwizzleClassSelectorForFunction(NSClassFromString(@"SenTestProbe"),
-                                          @selector(testScope),
-                                          (IMP)SenTestProbe_testScope);
-      }
-
-      NSDictionary *frameworkInfo = FrameworkInfoForExtension(@"octest");
-      ApplyDuplicateTestNameFix([frameworkInfo objectForKey:kTestingFrameworkTestProbeClassName],
-                                [frameworkInfo objectForKey:kTestingFrameworkTestSuiteClassName]);
-      XTApplySenTestClassEnumeratorFix();
-      XTApplySenTestCaseInvokeTestFix();
-      XTApplySenIsSuperclassOfClassPerformanceFix();
-    } else if (strstr(info[i].imageFilePath, "XCTest.framework") != NULL) {
-      // Since the 'XCTestLog' class now exists, we can swizzle it!
-      XTSwizzleSelectorForFunction(NSClassFromString(@"XCTestLog"),
-                                   @selector(testSuiteDidStart:),
-                                   (IMP)XCTestLog_testSuiteDidStart);
-      XTSwizzleSelectorForFunction(NSClassFromString(@"XCTestLog"),
-                                   @selector(testSuiteDidStop:),
-                                   (IMP)XCTestLog_testSuiteDidStop);
-      XTSwizzleSelectorForFunction(NSClassFromString(@"XCTestLog"),
-                                   @selector(testCaseDidStart:),
-                                   (IMP)XCTestLog_testCaseDidStart);
-      XTSwizzleSelectorForFunction(NSClassFromString(@"XCTestLog"),
-                                   @selector(testCaseDidStop:),
-                                   (IMP)XCTestLog_testCaseDidStop);
-      XTSwizzleSelectorForFunction(NSClassFromString(@"XCTestLog"),
-                                   @selector(testCaseDidFail:withDescription:inFile:atLine:),
-                                   (IMP)XCTestLog_testCaseDidFail);
-      XTSwizzleSelectorForFunction(NSClassFromString(@"XCTestCase"),
-                                   @selector(performTest:),
-                                   (IMP)XCTestCase_performTest);
-      if ([NSClassFromString(@"XCTestCase") respondsToSelector:@selector(_enableSymbolication)]) {
-        // Disable symbolication thing on xctest 7 because it sometimes takes forever.
-        XTSwizzleClassSelectorForFunction(NSClassFromString(@"XCTestCase"),
-                                          @selector(_enableSymbolication),
-                                          (IMP)XCTestCase__enableSymbolication);
-      }
-      NSDictionary *frameworkInfo = FrameworkInfoForExtension(@"xctest");
-      ApplyDuplicateTestNameFix([frameworkInfo objectForKey:kTestingFrameworkTestProbeClassName],
-                                [frameworkInfo objectForKey:kTestingFrameworkTestSuiteClassName]);
-    }
+  Dl_info imageInfo;
+  if (!dladdr(header, &imageInfo)) {
+    return;
   }
 
-  return NULL;
+  // Sometimes the image path will be something like...
+  //   '.../SenTestingKit.framework/SenTestingKit'
+  // Other times it could be...
+  //   '.../SenTestingKit.framework/Versions/A/SenTestingKit'
+  if (strstr(imageInfo.dli_fname, "SenTestingKit.framework") != NULL) {
+    // Since the 'SenTestLog' class now exists, we can swizzle it!
+    XTSwizzleClassSelectorForFunction(NSClassFromString(@"SenTestLog"),
+                                      @selector(testSuiteDidStart:),
+                                      (IMP)SenTestLog_testSuiteDidStart);
+    XTSwizzleClassSelectorForFunction(NSClassFromString(@"SenTestLog"),
+                                      @selector(testSuiteDidStop:),
+                                      (IMP)SenTestLog_testSuiteDidStop);
+    XTSwizzleClassSelectorForFunction(NSClassFromString(@"SenTestLog"),
+                                      @selector(testCaseDidStart:),
+                                      (IMP)SenTestLog_testCaseDidStart);
+    XTSwizzleClassSelectorForFunction(NSClassFromString(@"SenTestLog"),
+                                      @selector(testCaseDidStop:),
+                                      (IMP)SenTestLog_testCaseDidStop);
+    XTSwizzleClassSelectorForFunction(NSClassFromString(@"SenTestLog"),
+                                      @selector(testCaseDidFail:),
+                                      (IMP)SenTestLog_testCaseDidFail);
+    XTSwizzleSelectorForFunction(NSClassFromString(@"SenTestCase"),
+                                 @selector(performTest:),
+                                 (IMP)SenTestCase_performTest);
+    if (__testScope) {
+      XTSwizzleClassSelectorForFunction(NSClassFromString(@"SenTestProbe"),
+                                        @selector(testScope),
+                                        (IMP)SenTestProbe_testScope);
+    }
+
+    NSDictionary *frameworkInfo = FrameworkInfoForExtension(@"octest");
+    ApplyDuplicateTestNameFix([frameworkInfo objectForKey:kTestingFrameworkTestProbeClassName],
+                              [frameworkInfo objectForKey:kTestingFrameworkTestSuiteClassName]);
+    XTApplySenTestClassEnumeratorFix();
+    XTApplySenTestCaseInvokeTestFix();
+    XTApplySenIsSuperclassOfClassPerformanceFix();
+  } else if (strstr(imageInfo.dli_fname, "XCTest.framework") != NULL) {
+    // Since the 'XCTestLog' class now exists, we can swizzle it!
+    XTSwizzleSelectorForFunction(NSClassFromString(@"XCTestLog"),
+                                 @selector(testSuiteDidStart:),
+                                 (IMP)XCTestLog_testSuiteDidStart);
+    XTSwizzleSelectorForFunction(NSClassFromString(@"XCTestLog"),
+                                 @selector(testSuiteDidStop:),
+                                 (IMP)XCTestLog_testSuiteDidStop);
+    XTSwizzleSelectorForFunction(NSClassFromString(@"XCTestLog"),
+                                 @selector(testCaseDidStart:),
+                                 (IMP)XCTestLog_testCaseDidStart);
+    XTSwizzleSelectorForFunction(NSClassFromString(@"XCTestLog"),
+                                 @selector(testCaseDidStop:),
+                                 (IMP)XCTestLog_testCaseDidStop);
+    XTSwizzleSelectorForFunction(NSClassFromString(@"XCTestLog"),
+                                 @selector(testCaseDidFail:withDescription:inFile:atLine:),
+                                 (IMP)XCTestLog_testCaseDidFail);
+    XTSwizzleSelectorForFunction(NSClassFromString(@"XCTestCase"),
+                                 @selector(performTest:),
+                                 (IMP)XCTestCase_performTest);
+    if ([NSClassFromString(@"XCTestCase") respondsToSelector:@selector(_enableSymbolication)]) {
+      // Disable symbolication thing on xctest 7 because it sometimes takes forever.
+      XTSwizzleClassSelectorForFunction(NSClassFromString(@"XCTestCase"),
+                                        @selector(_enableSymbolication),
+                                        (IMP)XCTestCase__enableSymbolication);
+    }
+    NSDictionary *frameworkInfo = FrameworkInfoForExtension(@"xctest");
+    ApplyDuplicateTestNameFix([frameworkInfo objectForKey:kTestingFrameworkTestProbeClassName],
+                              [frameworkInfo objectForKey:kTestingFrameworkTestSuiteClassName]);
+  }
 }
 
 void handle_signal(int signal)
@@ -540,9 +541,7 @@ __attribute__((constructor)) static void EntryPoint()
   // We need to swizzle SenTestLog (part of SenTestingKit), but the test bundle
   // which links SenTestingKit hasn't been loaded yet.  Let's register to get
   // notified when libraries are initialized and we'll watch for SenTestingKit.
-  dyld_register_image_state_change_handler(dyld_image_state_initialized,
-                                           NO,
-                                           DyldImageStateChangeHandler);
+  _dyld_register_func_for_add_image(DyldAddImageHandler);
 
   // Unset so we don't cascade into any other process that might be spawned.
   unsetenv("DYLD_INSERT_LIBRARIES");

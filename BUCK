@@ -327,7 +327,6 @@ apple_library(
         'otest-shim/otest-shim/**/*.h',
     ]) + [
         'Common/dyld-interposing.h',
-        'Common/dyld_priv.h',
         'Common/EventGenerator.h',
         'Common/ReporterEvents.h',
         'Common/XCTest.h',
